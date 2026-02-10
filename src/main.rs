@@ -30,7 +30,7 @@ mod libc {
 struct Stats {
     min: i16,
     max: i16,
-    sum: i64,
+    sum: i32,
     count: usize,
 }
 
@@ -55,7 +55,7 @@ impl AddAssign<i16> for Stats {
     fn add_assign(&mut self, rhs: i16) {
         self.min = self.min.min(rhs);
         self.max = self.max.max(rhs);
-        self.sum += rhs as i64;
+        self.sum += rhs as i32;
         self.count += 1;
     }
 }
