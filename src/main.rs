@@ -1,4 +1,5 @@
 #![feature(slice_split_once)]
+#![feature(slice_from_ptr_range)]
 use std::{collections::HashMap, fs::File, ops::AddAssign, os::fd::AsRawFd};
 
 mod libc {
@@ -20,6 +21,8 @@ mod libc {
         ) -> *mut c_void;
 
         pub fn madvise(addr: *mut c_void, len: usize, advice: c_int) -> c_int;
+
+        pub fn memchr(cx: *const c_void, c: c_int, n: usize) -> *mut c_void;
     }
 }
 
@@ -105,13 +108,23 @@ fn main() {
     let file = File::open("./measurements.txt").unwrap();
     let file = mmap(file);
     let mut map = HashMap::<&[u8], Stats>::with_capacity(10_000);
-    for line in file.split(|b| *b == b'\n') {
+    let mut rest = file;
+    loop {
+        let line = unsafe {
+            if rest.len() < 3 {
+                break;
+            }
+            let nl_ptr = libc::memchr(rest.as_ptr().cast(), i32::from(b'\n'), rest.len());
+            let line = std::slice::from_ptr_range(rest.as_ptr()..nl_ptr.cast_const().cast());
+
+            rest = std::slice::from_ptr_range(
+                nl_ptr.add(1).cast_const().cast()..rest.as_ptr_range().end,
+            );
+            line
+        };
         if line.is_empty() {
             break;
         }
-        // foo;-00.0
-        //     --###
-        //     ;#
         let (station, temp) = parse_temp(line);
         *map.entry(station).or_default() += temp;
     }
