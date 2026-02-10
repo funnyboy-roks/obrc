@@ -80,7 +80,7 @@ fn mmap(file: File) -> &'static [u8] {
     unsafe { std::slice::from_raw_parts(ptr as *const u8, len) }
 }
 
-fn parse_temp(bytes: &[u8]) -> i16 {
+fn parse_temp(bytes: &[u8]) -> (&[u8], i16) {
     //   ;0.0
     //  ;-0.0
     //  ;00.0
@@ -91,13 +91,13 @@ fn parse_temp(bytes: &[u8]) -> i16 {
     match bytes[bytes.len() - 4] {
         b'0'..=b'9' => out += i16::from(bytes[bytes.len() - 4] - b'0') * 100,
         b'-' => out = -out,
-        b';' => return out,
+        b';' => return (&bytes[..bytes.len() - 4], out),
         _ => {}
     };
 
     match bytes[bytes.len() - 5] {
-        b'-' => -out,
-        _ => out,
+        b'-' => (&bytes[..bytes.len() - 6], -out),
+        _ => (&bytes[..bytes.len() - 5], out),
     }
 }
 
@@ -109,11 +109,10 @@ fn main() {
         if line.is_empty() {
             break;
         }
-        let (station, temp) = line.split_once(|b| *b == b';').unwrap();
         // foo;-00.0
         //     --###
         //     ;#
-        let temp = parse_temp(line);
+        let (station, temp) = parse_temp(line);
         *map.entry(station).or_default() += temp;
     }
 
@@ -126,11 +125,13 @@ fn main() {
         }
         let station = unsafe { std::str::from_utf8_unchecked(station) };
         print!(
-            "{}={:.1}/{:.1}/{:.1}",
+            "{}={}.{}/{:.1}/{}.{}",
             station,
-            stats.min as f64 / 10.,
+            stats.min / 10,
+            (stats.min % 10).unsigned_abs(),
             stats.mean(),
-            stats.max as f64 / 10.
+            stats.max / 10,
+            (stats.max % 10).unsigned_abs(),
         );
     }
     print!("}}");
@@ -142,11 +143,11 @@ mod test {
 
     #[test]
     fn parse_temperature() {
-        assert_eq!(parse_temp(b";42.1"), 421);
-        assert_eq!(parse_temp(b";-42.1"), -421);
-        assert_eq!(parse_temp(b";9.1"), 91);
-        assert_eq!(parse_temp(b";-9.1"), -91);
-        assert_eq!(parse_temp(b";0.1"), 1);
-        assert_eq!(parse_temp(b";-0.1"), -1);
+        assert_eq!(parse_temp(b"abc;42.1"), (&b"abc"[..], 421));
+        assert_eq!(parse_temp(b"abc;-42.1"), (&b"abc"[..], -421));
+        assert_eq!(parse_temp(b"abc;9.1"), (&b"abc"[..], 91));
+        assert_eq!(parse_temp(b"abc;-9.1"), (&b"abc"[..], -91));
+        assert_eq!(parse_temp(b"abc;0.1"), (&b"abc"[..], 1));
+        assert_eq!(parse_temp(b"abc;-0.1"), (&b"abc"[..], -1));
     }
 }
