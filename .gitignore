@@ -1,3 +1,4 @@
 /target
-measurements.txt
 perf.*
+*.txt
+flamegraph.svg

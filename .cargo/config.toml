@@ -1,2 +1,2 @@
 [build]
-rustflags = ["-Cforce-frame-pointers=true"]
+rustflags = ["-Cforce-frame-pointers=true", "-Ctarget-cpu=native"]

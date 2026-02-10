@@ -5,5 +5,7 @@ edition = "2024"
 
 [profile.release]
 debug = true
+lto = "fat"
+codegen-units = 1
 
 [dependencies]

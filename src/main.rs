@@ -25,34 +25,34 @@ mod libc {
 
 #[derive(Clone, Copy)]
 struct Stats {
-    min: f64,
-    max: f64,
-    sum: f64,
+    min: i16,
+    max: i16,
+    sum: i64,
     count: usize,
 }
 
 impl Stats {
     fn mean(self) -> f64 {
-        self.sum / self.count as f64
+        (self.sum as f64 / self.count as f64).round() / 10.
     }
 }
 
 impl Default for Stats {
     fn default() -> Self {
         Self {
-            min: f64::MAX,
-            max: f64::MIN,
+            min: i16::MAX,
+            max: i16::MIN,
             sum: Default::default(),
             count: Default::default(),
         }
     }
 }
 
-impl AddAssign<f64> for Stats {
-    fn add_assign(&mut self, rhs: f64) {
+impl AddAssign<i16> for Stats {
+    fn add_assign(&mut self, rhs: i16) {
         self.min = self.min.min(rhs);
         self.max = self.max.max(rhs);
-        self.sum += rhs;
+        self.sum += rhs as i64;
         self.count += 1;
     }
 }
@@ -80,6 +80,27 @@ fn mmap(file: File) -> &'static [u8] {
     unsafe { std::slice::from_raw_parts(ptr as *const u8, len) }
 }
 
+fn parse_temp(bytes: &[u8]) -> i16 {
+    //   ;0.0
+    //  ;-0.0
+    //  ;00.0
+    // ;-00.0
+    let mut out = i16::from(bytes[bytes.len() - 1] - b'0');
+    out += i16::from(bytes[bytes.len() - 3] - b'0') * 10;
+
+    match bytes[bytes.len() - 4] {
+        b'0'..=b'9' => out += i16::from(bytes[bytes.len() - 4] - b'0') * 100,
+        b'-' => out = -out,
+        b';' => return out,
+        _ => {}
+    };
+
+    match bytes[bytes.len() - 5] {
+        b'-' => -out,
+        _ => out,
+    }
+}
+
 fn main() {
     let file = File::open("./measurements.txt").unwrap();
     let file = mmap(file);
@@ -89,9 +110,10 @@ fn main() {
             break;
         }
         let (station, temp) = line.split_once(|b| *b == b';').unwrap();
-        let temp: f64 = unsafe { std::str::from_utf8_unchecked(temp) }
-            .parse()
-            .unwrap();
+        // foo;-00.0
+        //     --###
+        //     ;#
+        let temp = parse_temp(line);
         *map.entry(station).or_default() += temp;
     }
 
@@ -103,7 +125,28 @@ fn main() {
             print!(", ");
         }
         let station = unsafe { std::str::from_utf8_unchecked(station) };
-        print!("{}={}/{}/{}", station, stats.min, stats.mean(), stats.max);
+        print!(
+            "{}={:.1}/{:.1}/{:.1}",
+            station,
+            stats.min as f64 / 10.,
+            stats.mean(),
+            stats.max as f64 / 10.
+        );
     }
     print!("}}");
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn parse_temperature() {
+        assert_eq!(parse_temp(b";42.1"), 421);
+        assert_eq!(parse_temp(b";-42.1"), -421);
+        assert_eq!(parse_temp(b";9.1"), 91);
+        assert_eq!(parse_temp(b";-9.1"), -91);
+        assert_eq!(parse_temp(b";0.1"), 1);
+        assert_eq!(parse_temp(b";-0.1"), -1);
+    }
 }
