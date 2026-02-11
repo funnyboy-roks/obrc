@@ -18,4 +18,4 @@ cargo r --release
 This was done on stream:
 
 - Twitch: https://twitch.tv/funnyboy_roks
-- VODs: [TODO]
+- VODs: https://www.youtube.com/playlist?list=PLww5YlcKxyADKsBVpH_TbI2Jv3G3Wu-pU
