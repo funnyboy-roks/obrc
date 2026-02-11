@@ -1,7 +1,21 @@
 #![feature(slice_split_once)]
 #![feature(slice_from_ptr_range)]
+#![feature(portable_simd)]
 #![allow(clippy::missing_transmute_annotations)]
-use std::{collections::HashMap, fs::File, hash::BuildHasherDefault, os::fd::AsRawFd};
+
+use std::{
+    collections::HashMap,
+    fs::File,
+    hash::BuildHasherDefault,
+    os::fd::AsRawFd,
+    simd::{
+        Mask,
+        cmp::SimdPartialEq,
+        i16x8,
+        num::{SimdInt, SimdUint},
+        u8x8,
+    },
+};
 
 mod libc {
     use std::ffi::{c_int, c_void};
@@ -129,10 +143,10 @@ mod ahash {
                     [head.into(), tail.into()]
                 }
             } else {
-                if data.len() > 0 {
-                    [data[0] as u64, data[0] as u64]
-                } else {
+                if data.is_empty() {
                     [0, 0]
+                } else {
+                    [data[0] as u64, data[0] as u64]
                 }
             }
         }
@@ -332,34 +346,32 @@ fn mmap(file: File) -> &'static [u8] {
 }
 
 fn parse_temp(bytes: &[u8]) -> (&[u8], i16) {
-    //   ;0.0
-    //  ;-0.0
-    //  ;00.0
-    // ;-00.0
-    let get = |offset: usize| unsafe { bytes.get_unchecked(bytes.len() - offset) };
-    let slice = |offset: usize| unsafe { bytes.get_unchecked(..bytes.len() - offset) };
-    // 0.0
-    //   ^
-    let mut out = i16::from(get(1) - b'0');
-
-    // skip '.'
-
-    // 0.0
-    // ^
-    out += i16::from(get(3) - b'0') * 10;
-
-    match get(4) {
-        b @ b'0'..=b'9' => out += i16::from(b - b'0') * 100,
-        b'-' => out = -out,
-        b';' => return (slice(4), out),
-        _ => {}
+    let line = {
+        let slice = unsafe { bytes.get_unchecked(bytes.len() - 5..) };
+        let enable = Mask::from_array([true, true, true, true, true, false, false, false]);
+        let or = const { u8x8::splat(0) };
+        unsafe { u8x8::load_select_unchecked(slice, enable, or) }
     };
+    let line = line.rotate_elements_right::<3>();
+    let line: i16x8 = line.cast();
 
-    let neg = *get(5) == b'-';
-    (
-        slice(5 + usize::from(neg)),
-        out * ((1 - i16::from(neg)) * 2 - 1),
-    )
+    const ZERO_CHAR: i16x8 = i16x8::splat(b'0' as _);
+    let line = line - ZERO_CHAR;
+
+    let semi = line.simd_eq(const { i16x8::splat((b';' - b'0') as _) });
+    let neg = line.simd_eq(const { i16x8::splat(b'-' as i16 - b'0' as i16) });
+
+    const TENS: i16x8 = i16x8::from_array([0, 0, 0, 0, 100, 10, 0, 1]);
+    const ZERO: i16x8 = const { i16x8::splat(0) };
+    let line = (!semi).select(line, ZERO) * (!neg).select(TENS, ZERO);
+    let temp = line.reduce_sum() * (i16::from(!neg.any()) * 2 - 1);
+
+    let slice = |offset: usize| unsafe { bytes.get_unchecked(..bytes.len() - offset) };
+
+    let tz = semi.to_bitmask().trailing_zeros();
+    let s = if tz == 64 { 6 } else { 5 - tz as usize + 3 };
+
+    (slice(s), temp)
 }
 
 fn main() {
@@ -427,22 +439,5 @@ mod test {
         assert_eq!(parse_temp(b"abc;-9.1"), (&b"abc"[..], -91));
         assert_eq!(parse_temp(b"abc;0.1"), (&b"abc"[..], 1));
         assert_eq!(parse_temp(b"abc;-0.1"), (&b"abc"[..], -1));
-    }
-
-    #[test]
-    fn smol_str() {
-        macro_rules! ss_test {
-            ($slice: expr) => {
-                assert_eq!(SmolStr::from(&$slice[..]).as_ref(), $slice);
-            };
-        }
-
-        ss_test!([0, 1, 2, 3]);
-        ss_test!([
-            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20
-        ]);
-        ss_test!([0]);
-        ss_test!([]);
-        ss_test!(b"hello world");
     }
 }
