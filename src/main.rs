@@ -4,9 +4,10 @@
 #![allow(clippy::missing_transmute_annotations)]
 
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     fs::File,
     hash::BuildHasherDefault,
+    ops::AddAssign,
     os::fd::AsRawFd,
     simd::{
         Mask,
@@ -303,6 +304,15 @@ struct Stats {
     count: u32,
 }
 
+impl AddAssign for Stats {
+    fn add_assign(&mut self, rhs: Self) {
+        self.min = self.min.min(rhs.min);
+        self.max = self.max.max(rhs.max);
+        self.sum += rhs.sum;
+        self.count += rhs.count;
+    }
+}
+
 impl Stats {
     fn mean(self) -> f64 {
         (self.sum as f64 / self.count as f64).round() / 10.
@@ -374,14 +384,12 @@ fn parse_temp(bytes: &[u8]) -> (&[u8], i16) {
     (slice(s), temp)
 }
 
-fn main() {
-    let file = File::open("./measurements.txt").unwrap();
-    let file = mmap(file);
+fn process_chunk(chunk: &[u8]) -> HashMap<&[u8], Stats, BuildHasherDefault<ahash::AHasher>> {
     let mut map = HashMap::<&[u8], Stats, _>::with_capacity_and_hasher(
         10_000,
         BuildHasherDefault::<ahash::AHasher>::new(),
     );
-    let mut rest = file;
+    let mut rest = chunk;
     loop {
         let line = unsafe {
             if rest.len() < 3 {
@@ -405,9 +413,10 @@ fn main() {
         stats.sum += temp as i32;
         stats.count += 1;
     }
+    map
+}
 
-    let mut stations = map.into_iter().collect::<Vec<_>>();
-    stations.sort_unstable_by(|(a, _), (b, _)| a.as_ref().cmp(b.as_ref()));
+fn print_map(stations: BTreeMap<&[u8], Stats>) {
     print!("{{");
     for (i, (station, stats)) in stations.into_iter().enumerate() {
         if i > 0 {
@@ -425,6 +434,37 @@ fn main() {
         );
     }
     print!("}}");
+}
+
+fn main() {
+    let file = File::open("./measurements.txt").unwrap();
+    let file = mmap(file);
+
+    let nproc = std::thread::available_parallelism().unwrap().get();
+
+    let mut threads = Vec::with_capacity(nproc);
+    let mut rest = file;
+    while !rest.is_empty() {
+        let chunk_len = file.len() / nproc;
+        let i = rest[chunk_len.min(rest.len())..]
+            .iter()
+            .position(|b| *b == b'\n')
+            .map(|i| i + chunk_len)
+            .unwrap_or(rest.len() - 1);
+        let chunk = &rest[..=i];
+        rest = &rest[i + 1..];
+        threads.push(std::thread::spawn(move || process_chunk(chunk)));
+    }
+
+    let mut stations = BTreeMap::<&[u8], Stats>::new();
+    for thread in threads {
+        let map = thread.join().unwrap();
+        for (k, v) in map {
+            *stations.entry(k).or_default() += v;
+        }
+    }
+
+    print_map(stations);
 }
 
 #[cfg(test)]
