@@ -362,7 +362,7 @@ fn parse_temp(bytes: &[u8]) -> (&[u8], i16) {
         let or = const { u8x8::splat(0) };
         unsafe { u8x8::load_select_unchecked(slice, enable, or) }
     };
-    let line = line.rotate_elements_right::<3>();
+    let line = line.shift_elements_right::<3>(b';');
     let line: i16x8 = line.cast();
 
     const ZERO_CHAR: i16x8 = i16x8::splat(b'0' as _);
@@ -376,12 +376,11 @@ fn parse_temp(bytes: &[u8]) -> (&[u8], i16) {
     let line = (!semi).select(line, ZERO) * (!neg).select(TENS, ZERO);
     let temp = line.reduce_sum() * (i16::from(!neg.any()) * 2 - 1);
 
-    let slice = |offset: usize| unsafe { bytes.get_unchecked(..bytes.len() - offset) };
+    let tz = semi.reverse().to_bitmask().trailing_zeros();
+    debug_assert!(tz <= 8);
+    let s = tz as usize + 1;
 
-    let tz = semi.to_bitmask().trailing_zeros();
-    let s = if tz == 64 { 6 } else { 5 - tz as usize + 3 };
-
-    (slice(s), temp)
+    (unsafe { bytes.get_unchecked(..bytes.len() - s) }, temp)
 }
 
 fn process_chunk(chunk: &[u8]) -> HashMap<&[u8], Stats, BuildHasherDefault<ahash::AHasher>> {
