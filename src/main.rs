@@ -357,23 +357,30 @@ fn mmap(file: File) -> &'static [u8] {
 
 fn parse_temp(bytes: &[u8]) -> (&[u8], i16) {
     let line = {
-        let slice = unsafe { bytes.get_unchecked(bytes.len() - 5..) };
-        let enable = Mask::from_array([true, true, true, true, true, false, false, false]);
-        let or = const { u8x8::splat(0) };
-        unsafe { u8x8::load_select_unchecked(slice, enable, or) }
+        // This is not safe.  slice[0..2] are invalid, but we don't dereference them since the mask
+        // is false for those indexes.
+        let slice = unsafe { bytes.get_unchecked(bytes.len() - 8..) };
+        let enable = Mask::from_bitmask(0b1111_1000);
+        const DEFAULT: u8x8 = u8x8::splat(0);
+        unsafe { u8x8::load_select_unchecked(slice, enable, DEFAULT) }
     };
-    let line = line.shift_elements_right::<3>(b';');
     let line: i16x8 = line.cast();
 
     const ZERO_CHAR: i16x8 = i16x8::splat(b'0' as _);
     let line = line - ZERO_CHAR;
 
-    let semi = line.simd_eq(const { i16x8::splat((b';' - b'0') as _) });
-    let neg = line.simd_eq(const { i16x8::splat(b'-' as i16 - b'0' as i16) });
+    const SEMI: i16x8 = i16x8::splat(b';' as i16 - b'0' as i16);
+    const NEG: i16x8 = i16x8::splat(b'-' as i16 - b'0' as i16);
+    let mut semi = line.simd_eq(SEMI);
+    // SAFETY: 2 < 8
+    unsafe {
+        semi.set_unchecked(2, true);
+    }
+    let neg = line.simd_eq(NEG);
 
     const TENS: i16x8 = i16x8::from_array([0, 0, 0, 0, 100, 10, 0, 1]);
     const ZERO: i16x8 = const { i16x8::splat(0) };
-    let line = (!semi).select(line, ZERO) * (!neg).select(TENS, ZERO);
+    let line = (!semi & !neg).select(line, ZERO) * TENS;
     let temp = line.reduce_sum() * (i16::from(!neg.any()) * 2 - 1);
 
     let tz = semi.reverse().to_bitmask().trailing_zeros();
