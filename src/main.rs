@@ -355,42 +355,42 @@ fn mmap(file: File) -> &'static [u8] {
     unsafe { std::slice::from_raw_parts(ptr as *const u8, len) }
 }
 
+#[inline(never)]
 fn parse_temp(bytes: &[u8]) -> (&[u8], i16) {
-    let line = {
-        // This is not safe.  slice[0..2] are invalid, but we don't dereference them since the mask
-        // is false for those indexes.
-        let slice = unsafe { bytes.get_unchecked(bytes.len() - 8..) };
-        let enable = Mask::from_bitmask(0b1111_1000);
-        const DEFAULT: u8x8 = u8x8::splat(0);
-        unsafe { u8x8::load_select_unchecked(slice, enable, DEFAULT) }
-    };
-    let line: i16x8 = line.cast();
-
+    const SEMI_U8: u8x8 = u8x8::splat(b';');
+    const SEMI_I16: i16x8 = i16x8::splat(b';' as i16);
+    const NEG: i16x8 = i16x8::splat(b'-' as i16);
     const ZERO_CHAR: i16x8 = i16x8::splat(b'0' as _);
-    let line = line - ZERO_CHAR;
-
-    const SEMI: i16x8 = i16x8::splat(b';' as i16 - b'0' as i16);
-    const NEG: i16x8 = i16x8::splat(b'-' as i16 - b'0' as i16);
-    let mut semi = line.simd_eq(SEMI);
-    // SAFETY: 2 < 8
-    unsafe {
-        semi.set_unchecked(2, true);
-    }
-    let neg = line.simd_eq(NEG);
-
     const TENS: i16x8 = i16x8::from_array([0, 0, 0, 0, 100, 10, 0, 1]);
     const ZERO: i16x8 = const { i16x8::splat(0) };
+
+    // I wish this could be const...
+    let enable = Mask::from_bitmask(0b1111_1000);
+    // SAFETY: This is not strictly safe. ptr[0], ptr[1], and ptr[2] are not necessarily valid with
+    // the requirements set by the 1brc.
+    let ptr = unsafe { bytes.as_ptr().add(bytes.len() - 8) };
+    // SAFETY: This does not invalidate the safety of `ptr` as the `enable` mask only uses the
+    // last 5 items and does not dereference ptr[0], ptr[1], or ptr[2].
+    let line: i16x8 = unsafe { u8x8::load_select_ptr(ptr, enable, SEMI_U8) }.cast();
+
+    let semi = line.simd_eq(SEMI_I16);
+    let neg = line.simd_eq(NEG);
+
+    let line = line - ZERO_CHAR;
     let line = (!semi & !neg).select(line, ZERO) * TENS;
-    let temp = line.reduce_sum() * (i16::from(!neg.any()) * 2 - 1);
+    let temp = line.reduce_sum() * (-i16::from(neg.any()) | 1);
 
     let tz = semi.reverse().to_bitmask().trailing_zeros();
     debug_assert!(tz <= 8);
     let s = tz as usize + 1;
 
-    (unsafe { bytes.get_unchecked(..bytes.len() - s) }, temp)
+    let station = unsafe { bytes.get_unchecked(..bytes.len() - s) };
+
+    (station, temp)
 }
 
-fn process_chunk(chunk: &[u8]) -> HashMap<&[u8], Stats, BuildHasherDefault<ahash::AHasher>> {
+#[inline(never)]
+fn process_chunk(chunk: &[u8]) -> impl IntoIterator<Item = (&[u8], Stats)> {
     let mut map = HashMap::<&[u8], Stats, _>::with_capacity_and_hasher(
         10_000,
         BuildHasherDefault::<ahash::AHasher>::new(),
