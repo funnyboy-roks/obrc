@@ -11,7 +11,7 @@ use std::{
     ops::AddAssign,
     os::fd::AsRawFd,
     simd::{
-        Mask,
+        Mask, Select,
         cmp::SimdPartialEq,
         i16x8,
         num::{SimdInt, SimdUint},
@@ -224,6 +224,10 @@ fn main() {
     let file = mmap(file);
 
     let nproc = std::thread::available_parallelism().unwrap().get();
+    // NOTE: nproc*2 here is a little weird as obviously we can't be running more than nproc
+    // threads at once, yet using nproc*2 gives about a 10% speed up.  Working theory is that it
+    // helps when some threads are waiting on IO, but I'm not sure how that works with mmap.
+    let nproc = nproc * 2;
 
     let mut threads = Vec::with_capacity(nproc);
     let mut rest = file;
